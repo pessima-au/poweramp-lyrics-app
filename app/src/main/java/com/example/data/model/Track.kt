@@ -7,7 +7,8 @@ data class Track(
     val album: String,
     val durationMs: Long,
     val albumArtUri: String? = null,
-    val status: TrackStatus = TrackStatus.NO_LYRICS
+    val status: TrackStatus = TrackStatus.NO_LYRICS,
+    val path: String? = null
 )
 
 enum class TrackStatus {

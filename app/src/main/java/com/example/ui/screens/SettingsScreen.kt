@@ -14,6 +14,11 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.ui.AppViewModel
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import android.content.Intent
+import android.net.Uri
+import android.util.Log
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -30,6 +35,7 @@ fun SettingsScreen(
     val notifyFailure by viewModel.notifyFailure.collectAsState()
     val markInstrumental by viewModel.markInstrumental.collectAsState()
     val storageDestination by viewModel.storageDestination.collectAsState()
+    val safDirUri by viewModel.safDirUri.collectAsState()
     val geminiApiKey by viewModel.geminiApiKey.collectAsState()
     val matchingThreshold by viewModel.matchingThreshold.collectAsState()
     val floatingLyricsEnabled by viewModel.floatingLyricsEnabled.collectAsState()
@@ -39,6 +45,22 @@ fun SettingsScreen(
     val fontSizeSp by viewModel.immersiveFontSize.collectAsState()
     val alignment by viewModel.immersiveAlignment.collectAsState()
     val textShadow by viewModel.immersiveTextShadow.collectAsState()
+
+    val context = LocalContext.current
+    val safLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri != null) {
+            try {
+                val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                context.contentResolver.takePersistableUriPermission(uri, flags)
+                viewModel.setSafDirUri(uri.toString())
+            } catch (e: Exception) {
+                Log.e("SettingsScreen", "Failed to take persistable URI permission", e)
+                viewModel.setSafDirUri(uri.toString())
+            }
+        }
+    }
 
     var showClearCacheConfirm by remember { mutableStateOf(false) }
 
@@ -438,6 +460,123 @@ fun SettingsScreen(
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.Bold
                         )
+                    }
+
+                    if (storageDestination == "lrc") {
+                        val prettyUri = remember(safDirUri) {
+                            if (safDirUri.isNullOrEmpty()) "" else {
+                                try {
+                                    val decoded = Uri.decode(safDirUri)
+                                    val lastPart = decoded.substringAfterLast("/")
+                                    val docId = lastPart.substringAfter("tree/")
+                                    if (docId.isNotEmpty()) docId else decoded
+                                } catch (e: Exception) {
+                                    safDirUri
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Card(
+                            colors = CardDefaults.cardColors(
+                                containerColor = if (safDirUri.isNullOrEmpty()) 
+                                    MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.3f) 
+                                else 
+                                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.2f)
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Icon(
+                                        imageVector = if (safDirUri.isNullOrEmpty()) Icons.Default.Warning else Icons.Default.Folder,
+                                        contentDescription = "Storage Access Status",
+                                        tint = if (safDirUri.isNullOrEmpty()) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                                    )
+                                    Text(
+                                        text = if (safDirUri.isNullOrEmpty()) 
+                                            "No SAF Music Folder Linked" 
+                                        else 
+                                            "SAF Access Active",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (safDirUri.isNullOrEmpty()) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                                
+                                Text(
+                                    text = if (safDirUri.isNullOrEmpty()) 
+                                        "For scoped storage safety (Android 10+), please select your Music directory to write sidecar .lrc files in the same folders as your tracks."
+                                    else 
+                                        "Linked Folder: $prettyUri",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+
+                                Button(
+                                    onClick = {
+                                        try {
+                                            safLauncher.launch(null)
+                                        } catch (e: Exception) {
+                                            Log.e("SettingsScreen", "Failed to launch OpenDocumentTree", e)
+                                        }
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(if (safDirUri.isNullOrEmpty()) "Link Music Folder (SAF)" else "Change Music Folder")
+                                }
+                            }
+                        }
+                    }
+
+                    Divider()
+
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = "Manual Sync Status",
+                            fontWeight = FontWeight.SemiBold,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            text = "If the Immersive lyrics screen, floating overlay, or Poweramp lyrics view become desynchronized or stuck, force Poweramp to re-broadcast the active track's current playback state and position.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        var showSyncedToast by remember { mutableStateOf(false) }
+
+                        Button(
+                            onClick = {
+                                viewModel.forcePosSync()
+                                showSyncedToast = true
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("re_sync_plugin_button")
+                        ) {
+                            Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Re-sync Plugin")
+                        }
+
+                        if (showSyncedToast) {
+                            LaunchedEffect(key1 = showSyncedToast) {
+                                kotlinx.coroutines.delay(2000)
+                                showSyncedToast = false
+                            }
+                            Text(
+                                text = "Re-sync command sent to Poweramp!",
+                                color = MaterialTheme.colorScheme.primary,
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.align(Alignment.CenterHorizontally)
+                            )
+                        }
                     }
                 }
             }

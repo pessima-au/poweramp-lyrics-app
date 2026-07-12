@@ -20,6 +20,7 @@ class SettingsManager(private val context: Context) {
         val NOTIFY_FAILURE = booleanPreferencesKey("notify_failure")
         val MARK_INSTRUMENTAL = booleanPreferencesKey("mark_instrumental")
         val STORAGE_DESTINATION = stringPreferencesKey("storage_destination") // "cache", "lrc", "embed"
+        val SAF_DIR_URI = stringPreferencesKey("saf_dir_uri")
         val GEMINI_API_KEY = stringPreferencesKey("gemini_api_key")
         val MATCHING_THRESHOLD = intPreferencesKey("matching_threshold")
         val ACTIVE_PRESET = stringPreferencesKey("active_preset") // theme preset name
@@ -61,6 +62,10 @@ class SettingsManager(private val context: Context) {
 
     val storageDestinationFlow: Flow<String> = context.dataStore.data.map { preferences ->
         preferences[STORAGE_DESTINATION] ?: "cache"
+    }
+
+    val safDirUriFlow: Flow<String?> = context.dataStore.data.map { preferences ->
+        preferences[SAF_DIR_URI]
     }
 
     val geminiApiKeyFlow: Flow<String> = context.dataStore.data.map { preferences ->
@@ -144,6 +149,16 @@ class SettingsManager(private val context: Context) {
     suspend fun setStorageDestination(dest: String) {
         context.dataStore.edit { preferences ->
             preferences[STORAGE_DESTINATION] = dest
+        }
+    }
+
+    suspend fun setSafDirUri(uriStr: String?) {
+        context.dataStore.edit { preferences ->
+            if (uriStr != null) {
+                preferences[SAF_DIR_URI] = uriStr
+            } else {
+                preferences.remove(SAF_DIR_URI)
+            }
         }
     }
 

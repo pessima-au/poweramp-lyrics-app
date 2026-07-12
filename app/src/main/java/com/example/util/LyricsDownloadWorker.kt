@@ -21,7 +21,7 @@ class LyricsDownloadWorker(
         val db = AppDatabase.getDatabase(applicationContext)
         val lyricsDao = db.lyricsDao()
         val trackRepository = TrackRepository(applicationContext, lyricsDao)
-        val lyricsRepository = LyricsRepository(lyricsDao)
+        val lyricsRepository = LyricsRepository(applicationContext, lyricsDao)
 
         val total = trackIds.size
         var completedCount = 0

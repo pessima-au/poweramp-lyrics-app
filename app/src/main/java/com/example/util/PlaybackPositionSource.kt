@@ -7,6 +7,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.sample
 import kotlinx.coroutines.launch
 import com.maxmpz.poweramp.player.PowerampAPI
 import com.maxmpz.poweramp.player.PowerampAPIHelper
@@ -40,6 +42,14 @@ class PowerampPlaybackPositionSource(
     private val _currentTrackAlbum = MutableStateFlow("")
     val currentTrackAlbum: StateFlow<String> = _currentTrackAlbum.asStateFlow()
 
+    private val _currentTrackPath = MutableStateFlow("")
+    val currentTrackPath: StateFlow<String> = _currentTrackPath.asStateFlow()
+
+    private val _rawPosSyncFlow = MutableStateFlow<Long?>(null)
+    
+    private val _throttledPosSync = MutableStateFlow(0L)
+    val throttledPosSync: StateFlow<Long> = _throttledPosSync.asStateFlow()
+
     private var durationMs = 0L
     private var startTimeMs = 0L
     private var startPositionMs = 0L
@@ -51,6 +61,16 @@ class PowerampPlaybackPositionSource(
     }
 
     init {
+        scope.launch(Dispatchers.Default) {
+            _rawPosSyncFlow
+                .filterNotNull()
+                .sample(1000L)
+                .collect { posMs ->
+                    _throttledPosSync.value = posMs
+                    updatePosition(posMs)
+                    Log.d(TAG, "Processed throttled position sync: $posMs ms")
+                }
+        }
         register()
         requestPosSync()
     }
@@ -111,9 +131,22 @@ class PowerampPlaybackPositionSource(
     override fun onReceive(context: android.content.Context, intent: android.content.Intent) {
         when (intent.action) {
             PowerampAPI.ACTION_TRACK_POS_SYNC -> {
-                val posSec = intent.getIntExtra(PowerampAPI.Track.POSITION, 0)
-                updatePosition(posSec * 1000L)
-                Log.d(TAG, "ACTION_TRACK_POS_SYNC position=$posSec sec")
+                val posObj = intent.extras?.get(PowerampAPI.Track.POSITION)
+                if (posObj == null) {
+                    Log.w(TAG, "ACTION_TRACK_POS_SYNC: Poweramp returned null track position")
+                } else {
+                    try {
+                        val posSec = when (posObj) {
+                            is Number -> posObj.toInt()
+                            is String -> posObj.toIntOrNull() ?: 0
+                            else -> 0
+                        }
+                        _rawPosSyncFlow.value = posSec * 1000L
+                        Log.d(TAG, "ACTION_TRACK_POS_SYNC position=$posSec sec (queued for throttling)")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error parsing position extra in ACTION_TRACK_POS_SYNC: ${e.message}", e)
+                    }
+                }
             }
             PowerampAPI.ACTION_TRACK_CHANGED,
             PowerampAPI.ACTION_TRACK_CHANGED_EXPLICIT -> {
@@ -122,6 +155,7 @@ class PowerampPlaybackPositionSource(
                     val title = trackBundle.getString(PowerampAPI.Track.TITLE) ?: ""
                     val artist = trackBundle.getString(PowerampAPI.Track.ARTIST) ?: ""
                     val album = trackBundle.getString(PowerampAPI.Track.ALBUM) ?: ""
+                    val path = trackBundle.getString(PowerampAPI.Track.PATH) ?: ""
                     var dur = trackBundle.getInt(PowerampAPI.Track.DURATION_MS, 0).toLong()
                     if (dur <= 0) {
                         dur = trackBundle.getInt(PowerampAPI.Track.DURATION, 0) * 1000L
@@ -130,9 +164,10 @@ class PowerampPlaybackPositionSource(
                     _currentTrackTitle.value = title
                     _currentTrackArtist.value = artist
                     _currentTrackAlbum.value = album
+                    _currentTrackPath.value = path
                     setDuration(dur)
 
-                    Log.d(TAG, "TRACK_CHANGED: action=${intent.action} title=$title, artist=$artist, dur=$dur ms")
+                    Log.d(TAG, "TRACK_CHANGED: action=${intent.action} title=$title, artist=$artist, path=$path, dur=$dur ms")
                     requestPosSync()
                 }
             }
@@ -142,9 +177,21 @@ class PowerampPlaybackPositionSource(
                 val isPlayingState = !paused
                 setPlaying(isPlayingState)
 
-                val posSec = intent.getIntExtra(PowerampAPI.Track.POSITION, -1)
-                if (posSec >= 0) {
-                    updatePosition(posSec * 1000L)
+                val posObj = intent.extras?.get(PowerampAPI.Track.POSITION)
+                var posSec = -1
+                if (posObj != null) {
+                    try {
+                        posSec = when (posObj) {
+                            is Number -> posObj.toInt()
+                            is String -> posObj.toIntOrNull() ?: -1
+                            else -> -1
+                        }
+                        if (posSec >= 0) {
+                            updatePosition(posSec * 1000L)
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error parsing position extra in STATUS_CHANGED: ${e.message}", e)
+                    }
                 }
                 Log.d(TAG, "STATUS_CHANGED: action=${intent.action} playing=$isPlayingState pos=$posSec")
             }

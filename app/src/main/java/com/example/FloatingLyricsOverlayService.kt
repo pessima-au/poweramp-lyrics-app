@@ -106,7 +106,7 @@ class FloatingLyricsOverlayService : Service(), LifecycleOwner, SavedStateRegist
 
         // Initialize repository
         val db = AppDatabase.getDatabase(applicationContext)
-        lyricsRepository = LyricsRepository(db.lyricsDao())
+        lyricsRepository = LyricsRepository(applicationContext, db.lyricsDao())
 
         // Initialize playback source
         playbackPositionSource = PowerampPlaybackPositionSource(application, serviceScope)

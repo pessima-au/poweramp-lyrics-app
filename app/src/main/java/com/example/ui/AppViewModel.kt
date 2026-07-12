@@ -23,6 +23,8 @@ import com.example.util.MatchingEngine
 import com.example.util.MatchingResult
 import com.example.util.SimulatedPlaybackPositionSource
 import com.example.util.PowerampPlaybackPositionSource
+import com.maxmpz.poweramp.player.PowerampAPI
+import com.maxmpz.poweramp.player.PowerampAPIHelper
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -116,6 +118,7 @@ class AppViewModel(
     val notifyFailure = settingsManager.notifyFailureFlow.stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val markInstrumental = settingsManager.markInstrumentalFlow.stateIn(viewModelScope, SharingStarted.Eagerly, true)
     val storageDestination = settingsManager.storageDestinationFlow.stateIn(viewModelScope, SharingStarted.Eagerly, "cache")
+    val safDirUri = settingsManager.safDirUriFlow.stateIn(viewModelScope, SharingStarted.Eagerly, null)
     val geminiApiKey = settingsManager.geminiApiKeyFlow.stateIn(viewModelScope, SharingStarted.Eagerly, "")
     val matchingThreshold = settingsManager.matchingThresholdFlow.stateIn(viewModelScope, SharingStarted.Eagerly, 70)
     val activePreset = settingsManager.activePresetFlow.stateIn(viewModelScope, SharingStarted.Eagerly, "Album Art Glow")
@@ -269,7 +272,7 @@ class AppViewModel(
         viewModelScope.launch {
             _isLoading.value = true
             val lyrics = lyricsRepository.getLyricsForTrack(
-                track.title, track.artist, track.album, track.durationMs, forceRefresh = true
+                track.title, track.artist, track.album, track.durationMs, forceRefresh = true, trackPath = track.path
             )
             if (lyrics != null) {
                 _selectedTrackLyrics.value = lyrics
@@ -312,7 +315,7 @@ class AppViewModel(
         viewModelScope.launch {
             _isLoading.value = true
             val entity = lyricsRepository.selectCandidateAndSave(
-                track.title, track.artist, track.album, track.durationMs, result
+                track.title, track.artist, track.album, track.durationMs, result, trackPath = track.path
             )
             _selectedTrackLyrics.value = entity
             _lrcLines.value = LrcParser.parse(entity.syncedLyrics)
@@ -399,7 +402,8 @@ class AppViewModel(
                 track.title, track.artist, track.album, track.durationMs,
                 plainLyrics = plain.ifBlank { null },
                 syncedLyrics = synced.ifBlank { null },
-                isInstrumental = isInstrumental
+                isInstrumental = isInstrumental,
+                trackPath = track.path
             )
             _selectedTrackLyrics.value = entity
             _lrcLines.value = LrcParser.parse(entity.syncedLyrics)
@@ -429,6 +433,17 @@ class AppViewModel(
             val line = currentLines[index]
             val currentPos = playbackPositionSource.currentPositionMs.value
             currentLines[index] = line.copy(timestampMs = currentPos)
+            _lrcLines.value = currentLines.sortedBy { it.timestampMs }
+            val syncedLrc = LrcParser.makeLrc(_lrcLines.value)
+            saveEditedLyrics(_plainLyrics.value, syncedLrc, false)
+        }
+    }
+
+    // Update a line's text and/or timestamp directly
+    fun updateLrcLine(index: Int, newText: String, newTimestampMs: Long) {
+        val currentLines = _lrcLines.value.toMutableList()
+        if (index in currentLines.indices) {
+            currentLines[index] = LrcLine(timestampMs = newTimestampMs.coerceAtLeast(0L), text = newText)
             _lrcLines.value = currentLines.sortedBy { it.timestampMs }
             val syncedLrc = LrcParser.makeLrc(_lrcLines.value)
             saveEditedLyrics(_plainLyrics.value, syncedLrc, false)
@@ -499,6 +514,7 @@ class AppViewModel(
     fun setNotifyFailure(enabled: Boolean) = viewModelScope.launch { settingsManager.setNotifyFailure(enabled) }
     fun setMarkInstrumental(enabled: Boolean) = viewModelScope.launch { settingsManager.setMarkInstrumental(enabled) }
     fun setStorageDestination(dest: String) = viewModelScope.launch { settingsManager.setStorageDestination(dest) }
+    fun setSafDirUri(uriStr: String?) = viewModelScope.launch { settingsManager.setSafDirUri(uriStr) }
     fun setGeminiApiKey(key: String) = viewModelScope.launch { settingsManager.setGeminiApiKey(key) }
     fun setMatchingThreshold(threshold: Int) = viewModelScope.launch { settingsManager.setMatchingThreshold(threshold) }
     fun setActivePreset(preset: String) = viewModelScope.launch { settingsManager.setActivePreset(preset) }
@@ -506,6 +522,19 @@ class AppViewModel(
     fun setImmersiveFontSize(size: Float) = viewModelScope.launch { settingsManager.setImmersiveFontSize(size) }
     fun setImmersiveAlignment(alignment: String) = viewModelScope.launch { settingsManager.setImmersiveAlignment(alignment) }
     fun setImmersiveTextShadow(enabled: Boolean) = viewModelScope.launch { settingsManager.setImmersiveTextShadow(enabled) }
+    
+    fun forcePosSync() {
+        try {
+            PowerampAPIHelper.sendPAIntent(
+                getApplication(),
+                android.content.Intent(PowerampAPI.ACTION_API_COMMAND)
+                    .putExtra(PowerampAPI.EXTRA_COMMAND, PowerampAPI.Commands.POS_SYNC)
+            )
+            Log.d("AppViewModel", "Manual POS_SYNC command broadcast sent to Poweramp")
+        } catch (e: Exception) {
+            Log.e("AppViewModel", "Failed to send manual POS_SYNC command to Poweramp", e)
+        }
+    }
     
     fun setFloatingLyricsEnabled(enabled: Boolean) = viewModelScope.launch {
         settingsManager.setFloatingLyricsEnabled(enabled)

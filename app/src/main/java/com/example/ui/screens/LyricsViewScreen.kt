@@ -111,45 +111,72 @@ fun LyricsViewScreen(
                 Spacer(modifier = Modifier.height(16.dp))
 
                 // Action Bar
-                Row(
+                Column(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     Button(
                         onClick = { viewModel.navigateTo("immersive_lyrics") },
                         modifier = Modifier
-                            .weight(1.5f)
+                            .fillMaxWidth()
+                            .height(52.dp)
                             .testTag("launch_immersive_btn"),
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+                        shape = MaterialTheme.shapes.medium
                     ) {
-                        Icon(Icons.Default.Fullscreen, contentDescription = null)
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Immersive Now Playing")
+                        Icon(Icons.Default.Fullscreen, contentDescription = null, modifier = Modifier.size(20.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Immersive Now Playing",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold
+                        )
                     }
 
-                    OutlinedButton(
-                        onClick = { viewModel.navigateTo("lyrics_editor") },
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("edit_lyrics_btn")
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Icon(Icons.Default.Edit, contentDescription = null)
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Edit")
-                    }
+                        OutlinedButton(
+                            onClick = { viewModel.navigateTo("lyrics_editor") },
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp)
+                                .testTag("edit_lyrics_btn"),
+                            shape = MaterialTheme.shapes.medium,
+                            contentPadding = PaddingValues(horizontal = 12.dp)
+                        ) {
+                            Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Edit Lyrics",
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                style = MaterialTheme.typography.labelLarge
+                            )
+                        }
 
-                    OutlinedButton(
-                        onClick = {
-                            viewModel.setSearchQuery("${track!!.title} ${track!!.artist}")
-                            viewModel.navigateTo("search")
-                        },
-                        modifier = Modifier
-                            .weight(1.2f)
-                            .testTag("find_alternates_btn")
-                    ) {
-                        Icon(Icons.Default.Search, contentDescription = null)
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Search Source")
+                        OutlinedButton(
+                            onClick = {
+                                viewModel.setSearchQuery("${track!!.title} ${track!!.artist}")
+                                viewModel.navigateTo("search")
+                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp)
+                                .testTag("find_alternates_btn"),
+                            shape = MaterialTheme.shapes.medium,
+                            contentPadding = PaddingValues(horizontal = 12.dp)
+                        ) {
+                            Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Search Source",
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                style = MaterialTheme.typography.labelLarge
+                            )
+                        }
                     }
                 }
 

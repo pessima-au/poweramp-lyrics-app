@@ -1,6 +1,7 @@
 package com.example.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -20,6 +21,8 @@ import androidx.compose.ui.unit.dp
 import com.example.ui.AppViewModel
 import com.example.util.LrcLine
 import com.example.util.LrcParser
+import com.example.data.model.Track
+import com.example.data.model.CachedLyricsEntity
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -33,7 +36,7 @@ fun EditorScreen(
     val plainLyricsState by viewModel.plainLyrics.collectAsState()
 
     var activeTab by remember { mutableStateOf("Timeline Sync") }
-    val tabs = listOf("Timeline Sync", "Plain Text Edit")
+    val tabs = listOf("Timeline Sync", "Plain Text Edit", "Sync Preview")
 
     // Local states for editing plain text
     var plainTextDraft by remember { mutableStateOf("") }
@@ -46,6 +49,7 @@ fun EditorScreen(
     val isAiLoading by viewModel.isAiLoading.collectAsState()
     var selectedTranslationLang by remember { mutableStateOf("Spanish") }
     var showAiAssistPanel by remember { mutableStateOf(false) }
+    var lineToEdit by remember { mutableStateOf<Pair<Int, LrcLine>?>(null) }
 
     Scaffold(
         topBar = {
@@ -96,11 +100,14 @@ fun EditorScreen(
                     .fillMaxHeight()
                     .padding(16.dp)
             ) {
-                if (track == null) {
+                val currentTrack = track
+                if (currentTrack == null) {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Text("No track selected.")
                     }
                 } else {
+                    LyricsMetadataPanel(track = currentTrack, lyrics = lyrics)
+
                     TabRow(selectedTabIndex = tabs.indexOf(activeTab)) {
                         tabs.forEach { tab ->
                             Tab(
@@ -165,6 +172,293 @@ fun EditorScreen(
                                         onNudgeLater = { viewModel.nudgeTimestamp(index, 500L) },
                                         onSyncCurrent = { viewModel.syncLineToCurrentPosition(index) }
                                     )
+                                }
+                            }
+                        }
+                    } else if (activeTab == "Sync Preview") {
+                        if (lrcLines.isEmpty()) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .weight(1f),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Icon(Icons.Default.Timer, contentDescription = null, modifier = Modifier.size(48.dp))
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text(
+                                        text = "No synced lyrics timeline exists.",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Button(onClick = {
+                                        val initialLines = plainTextDraft.lineSequence()
+                                            .filter { it.isNotBlank() }
+                                            .mapIndexed { idx, txt -> LrcLine((idx * 4000).toLong(), txt) }
+                                            .toList()
+                                        val lrcStr = LrcParser.makeLrc(initialLines)
+                                        viewModel.saveEditedLyrics(plainTextDraft, lrcStr, false)
+                                    }) {
+                                        Text("Convert Plain Text to Timeline")
+                                    }
+                                }
+                            }
+                        } else {
+                            val currentPosMs by viewModel.playbackPositionSource.currentPositionMs.collectAsState()
+                            val playState by viewModel.playbackPositionSource.isPlaying.collectAsState()
+                            var autoScroll by remember { mutableStateOf(true) }
+                            val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+
+                            val activeLineIdx = remember(lrcLines, currentPosMs) {
+                                val idx = lrcLines.indexOfLast { currentPosMs >= it.timestampMs }
+                                if (idx == -1) 0 else idx
+                            }
+
+                            LaunchedEffect(activeLineIdx, autoScroll) {
+                                if (autoScroll && activeLineIdx >= 0 && activeLineIdx < lrcLines.size) {
+                                    val targetScrollIdx = (activeLineIdx - 2).coerceAtLeast(0)
+                                    listState.animateScrollToItem(targetScrollIdx)
+                                }
+                            }
+
+                            // Playback Control Strip
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 12.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                                )
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        FilledIconButton(
+                                            onClick = { viewModel.playbackPositionSource.setPlaying(!playState) },
+                                            modifier = Modifier.size(40.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = if (playState) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                                contentDescription = if (playState) "Pause" else "Play"
+                                            )
+                                        }
+
+                                        IconButton(
+                                            onClick = {
+                                                val target = (currentPosMs - 5000L).coerceAtLeast(0L)
+                                                viewModel.playbackPositionSource.seekTo(target)
+                                            },
+                                            modifier = Modifier.size(36.dp)
+                                        ) {
+                                            Icon(Icons.Default.FastRewind, contentDescription = "Rewind 5s")
+                                        }
+
+                                        IconButton(
+                                            onClick = {
+                                                val target = currentPosMs + 5000L
+                                                viewModel.playbackPositionSource.seekTo(target)
+                                            },
+                                            modifier = Modifier.size(36.dp)
+                                        ) {
+                                            Icon(Icons.Default.FastForward, contentDescription = "Forward 5s")
+                                        }
+                                    }
+
+                                    Column(
+                                        horizontalAlignment = Alignment.End
+                                    ) {
+                                        val formattedCurrent = remember(currentPosMs) {
+                                            val minutes = (currentPosMs / 1000) / 60
+                                            val seconds = (currentPosMs / 1000) % 60
+                                            val hundredths = (currentPosMs % 1000) / 10
+                                            String.format(java.util.Locale.US, "%02d:%02d.%02d", minutes, seconds, hundredths)
+                                        }
+                                        val durationVal = track?.durationMs ?: 0L
+                                        val formattedDuration = remember(durationVal) {
+                                            val minutes = (durationVal / 1000) / 60
+                                            val seconds = (durationVal / 1000) % 60
+                                            val hundredths = (durationVal % 1000) / 10
+                                            String.format(java.util.Locale.US, "%02d:%02d.%02d", minutes, seconds, hundredths)
+                                        }
+                                        Text(
+                                            text = "$formattedCurrent / $formattedDuration",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                                        )
+
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                        ) {
+                                            Checkbox(
+                                                checked = autoScroll,
+                                                onCheckedChange = { autoScroll = it }
+                                            )
+                                            Text(
+                                                text = "Auto-Scroll",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Scrolling List
+                            LazyColumn(
+                                state = listState,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .weight(1f)
+                                    .testTag("sync_preview_list"),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                itemsIndexed(lrcLines) { index, line ->
+                                    val isActive = index == activeLineIdx
+                                    val cardColor = if (isActive) {
+                                        MaterialTheme.colorScheme.primaryContainer
+                                    } else {
+                                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
+                                    }
+                                    val borderStroke = if (isActive) {
+                                        androidx.compose.foundation.BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
+                                    } else {
+                                        androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                                    }
+
+                                    Card(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .testTag("preview_item_$index"),
+                                        colors = CardDefaults.cardColors(containerColor = cardColor),
+                                        border = borderStroke,
+                                        onClick = {
+                                            viewModel.playbackPositionSource.seekTo(line.timestampMs)
+                                        }
+                                    ) {
+                                        Column(
+                                            modifier = Modifier.padding(12.dp)
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Text(
+                                                    text = "[${line.formattedTime}]",
+                                                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = if (isActive) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.secondary,
+                                                    style = MaterialTheme.typography.bodyMedium
+                                                )
+
+                                                if (isActive) {
+                                                    Surface(
+                                                        shape = MaterialTheme.shapes.extraSmall,
+                                                        color = MaterialTheme.colorScheme.primary,
+                                                        modifier = Modifier.padding(horizontal = 4.dp)
+                                                    ) {
+                                                        Text(
+                                                            text = "ACTIVE",
+                                                            color = MaterialTheme.colorScheme.onPrimary,
+                                                            style = MaterialTheme.typography.labelSmall,
+                                                            fontWeight = FontWeight.Bold,
+                                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                        )
+                                                    }
+                                                }
+                                            }
+
+                                            Spacer(modifier = Modifier.height(4.dp))
+
+                                            Text(
+                                                text = line.text,
+                                                style = if (isActive) MaterialTheme.typography.titleMedium else MaterialTheme.typography.bodyLarge,
+                                                fontWeight = if (isActive) FontWeight.ExtraBold else FontWeight.Normal,
+                                                color = if (isActive) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+                                            )
+
+                                            Spacer(modifier = Modifier.height(8.dp))
+
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                                    FilledIconButton(
+                                                        onClick = { viewModel.nudgeTimestamp(index, -100L) },
+                                                        modifier = Modifier.size(32.dp),
+                                                        colors = IconButtonDefaults.filledIconButtonColors(
+                                                            containerColor = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondaryContainer
+                                                        )
+                                                    ) {
+                                                        Text("-0.1s", style = MaterialTheme.typography.labelSmall)
+                                                    }
+                                                    FilledIconButton(
+                                                        onClick = { viewModel.nudgeTimestamp(index, -500L) },
+                                                        modifier = Modifier.size(32.dp),
+                                                        colors = IconButtonDefaults.filledIconButtonColors(
+                                                            containerColor = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondaryContainer
+                                                        )
+                                                    ) {
+                                                        Text("-0.5s", style = MaterialTheme.typography.labelSmall)
+                                                    }
+                                                    FilledIconButton(
+                                                        onClick = { viewModel.nudgeTimestamp(index, 500L) },
+                                                        modifier = Modifier.size(32.dp),
+                                                        colors = IconButtonDefaults.filledIconButtonColors(
+                                                            containerColor = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondaryContainer
+                                                        )
+                                                    ) {
+                                                        Text("+0.5s", style = MaterialTheme.typography.labelSmall)
+                                                    }
+                                                    FilledIconButton(
+                                                        onClick = { viewModel.nudgeTimestamp(index, 100L) },
+                                                        modifier = Modifier.size(32.dp),
+                                                        colors = IconButtonDefaults.filledIconButtonColors(
+                                                            containerColor = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondaryContainer
+                                                        )
+                                                    ) {
+                                                        Text("+0.1s", style = MaterialTheme.typography.labelSmall)
+                                                    }
+                                                }
+
+                                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                                    IconButton(
+                                                        onClick = { viewModel.syncLineToCurrentPosition(index) },
+                                                        modifier = Modifier.size(32.dp)
+                                                    ) {
+                                                        Icon(
+                                                            imageVector = Icons.Default.FlashOn,
+                                                            contentDescription = "Snap to Current Time",
+                                                            tint = if (isActive) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.primary
+                                                        )
+                                                    }
+                                                    IconButton(
+                                                        onClick = { lineToEdit = Pair(index, line) },
+                                                        modifier = Modifier.size(32.dp)
+                                                    ) {
+                                                        Icon(
+                                                            imageVector = Icons.Default.Edit,
+                                                            contentDescription = "Edit Line Details",
+                                                            tint = if (isActive) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -350,6 +644,63 @@ fun EditorScreen(
             }
         }
     }
+
+    lineToEdit?.let { (index, line) ->
+        var editedText by remember(line) { mutableStateOf(line.text) }
+        var editedTimeMsStr by remember(line) { mutableStateOf(line.timestampMs.toString()) }
+
+        AlertDialog(
+            onDismissRequest = { lineToEdit = null },
+            title = { Text("Edit Line Timing & Text") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedTextField(
+                        value = editedText,
+                        onValueChange = { editedText = it },
+                        label = { Text("Lyric Text") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = editedTimeMsStr,
+                        onValueChange = { editedTimeMsStr = it },
+                        label = { Text("Timestamp (Milliseconds)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+
+                    val parsedMs = editedTimeMsStr.toLongOrNull() ?: 0L
+                    val formattedHelper = remember(parsedMs) {
+                        val minutes = (parsedMs / 1000) / 60
+                        val seconds = (parsedMs / 1000) % 60
+                        val hundredths = (parsedMs % 1000) / 10
+                        String.format(java.util.Locale.US, "%02d:%02d.%02d", minutes, seconds, hundredths)
+                    }
+                    Text(
+                        text = "Formatted time: [$formattedHelper]",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val finalMs = editedTimeMsStr.toLongOrNull() ?: line.timestampMs
+                        viewModel.updateLrcLine(index, editedText, finalMs)
+                        lineToEdit = null
+                    }
+                ) {
+                    Text("Save Changes")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { lineToEdit = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
 }
 
 @Composable
@@ -413,6 +764,199 @@ fun LrcNudgeItem(
                 text = line.text,
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.Medium
+            )
+        }
+    }
+}
+
+@Composable
+fun LyricsMetadataPanel(
+    track: Track,
+    lyrics: CachedLyricsEntity?
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 16.dp)
+            .testTag("lyrics_metadata_panel"),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+        ),
+        border = androidx.compose.foundation.BorderStroke(
+            width = 1.dp,
+            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+        )
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp)
+        ) {
+            // Track header
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.LibraryMusic,
+                    contentDescription = "Track Info Icon",
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(24.dp)
+                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = track.title,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "${track.artist} • ${track.album}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+            Divider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Technical metadata section title
+            Text(
+                text = "LYRICS TECHNICAL METADATA",
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary
+            )
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            if (lyrics == null) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Warning,
+                        contentDescription = "Warning Icon",
+                        tint = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Text(
+                        text = "No fetched or cached lyrics database entry for this track yet.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else {
+                // Layout technical specifications in a clean grid/row structure
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    // Left Column: Source, Confidence
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        MetadataItem(
+                            icon = Icons.Default.Cloud,
+                            label = "Source Provider",
+                            value = lyrics.source
+                        )
+                        
+                        val scoreText = if (lyrics.isUserEdited) "100% (Manual)" else "${lyrics.confidenceScore}% Match"
+                        val scoreColor = when {
+                            lyrics.isUserEdited -> MaterialTheme.colorScheme.primary
+                            lyrics.confidenceScore >= 90 -> MaterialTheme.colorScheme.primary
+                            lyrics.confidenceScore >= 70 -> androidx.compose.ui.graphics.Color(0xFFE65100) // Orange
+                            else -> MaterialTheme.colorScheme.error
+                        }
+                        
+                        MetadataItem(
+                            icon = Icons.Default.CheckCircle,
+                            label = "Confidence Score",
+                            value = scoreText,
+                            valueColor = scoreColor
+                        )
+                    }
+
+                    // Right Column: Sync Status, Date/Time
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        val (syncText, syncIcon) = when {
+                            lyrics.isInstrumental -> "Instrumental (No Lyrics)" to Icons.Default.MusicNote
+                            !lyrics.syncedLyrics.isNullOrEmpty() -> "Fully Synced (LRC)" to Icons.Default.Schedule
+                            !lyrics.plainLyrics.isNullOrEmpty() -> "Plain Text Only" to Icons.Default.Notes
+                            else -> "Empty / Missing" to Icons.Default.HelpOutline
+                        }
+                        
+                        MetadataItem(
+                            icon = syncIcon,
+                            label = "Sync Type",
+                            value = syncText
+                        )
+
+                        val formattedDate = remember(lyrics.fetchedAt) {
+                            try {
+                                val sdf = java.text.SimpleDateFormat("MMM dd, yyyy HH:mm", java.util.Locale.getDefault())
+                                sdf.format(java.util.Date(lyrics.fetchedAt))
+                            } catch (e: Exception) {
+                                "Unknown"
+                            }
+                        }
+
+                        MetadataItem(
+                            icon = Icons.Default.History,
+                            label = "Cached Timestamp",
+                            value = formattedDate
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun MetadataItem(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    value: String,
+    valueColor: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.onSurface
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Box(
+            modifier = Modifier.background(
+                color = MaterialTheme.colorScheme.surfaceColorAtElevation(1.dp),
+                shape = MaterialTheme.shapes.extraSmall
+            ).padding(6.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.secondary,
+                modifier = Modifier.size(16.dp)
+            )
+        }
+        Column {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = value,
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.Bold,
+                color = valueColor
             )
         }
     }

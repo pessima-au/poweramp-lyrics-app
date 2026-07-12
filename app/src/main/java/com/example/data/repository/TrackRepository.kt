@@ -22,13 +22,13 @@ class TrackRepository(
     
     // Static mock tracks for Phase 1 demo/preview when Poweramp is not installed
     private val mockTracks = listOf(
-        Track(1, "Blinding Lights", "The Weeknd", "After Hours", 200000, null, TrackStatus.NO_LYRICS),
-        Track(2, "Shape of You", "Ed Sheeran", "Divide", 233000, null, TrackStatus.NO_LYRICS),
-        Track(3, "Bohemian Rhapsody", "Queen", "A Night at the Opera", 354000, null, TrackStatus.NO_LYRICS),
-        Track(4, "Stay", "The Kid LAROI & Justin Bieber", "F*CK LOVE 3: OVER YOU", 141000, null, TrackStatus.NO_LYRICS),
-        Track(5, "Hotel California", "Eagles", "Hotel California", 390000, null, TrackStatus.NO_LYRICS),
-        Track(6, "Weightless", "Marconi Union", "Ambient Transmissions Volume 2", 480000, null, TrackStatus.INSTRUMENTAL),
-        Track(7, "Fake Song Nonexistent ABCXYZ", "Unknown Artist", "No Album", 120000, null, TrackStatus.NO_LYRICS)
+        Track(1, "Blinding Lights", "The Weeknd", "After Hours", 200000, null, TrackStatus.NO_LYRICS, "/storage/emulated/0/Music/The Weeknd/After Hours/Blinding Lights.mp3"),
+        Track(2, "Shape of You", "Ed Sheeran", "Divide", 233000, null, TrackStatus.NO_LYRICS, "/storage/emulated/0/Music/Ed Sheeran/Divide/Shape of You.mp3"),
+        Track(3, "Bohemian Rhapsody", "Queen", "A Night at the Opera", 354000, null, TrackStatus.NO_LYRICS, "/storage/emulated/0/Music/Queen/A Night at the Opera/Bohemian Rhapsody.mp3"),
+        Track(4, "Stay", "The Kid LAROI & Justin Bieber", "F*CK LOVE 3: OVER YOU", 141000, null, TrackStatus.NO_LYRICS, "/storage/emulated/0/Music/The Kid LAROI/Stay.mp3"),
+        Track(5, "Hotel California", "Eagles", "Hotel California", 390000, null, TrackStatus.NO_LYRICS, "/storage/emulated/0/Music/Eagles/Hotel California.mp3"),
+        Track(6, "Weightless", "Marconi Union", "Ambient Transmissions Volume 2", 480000, null, TrackStatus.INSTRUMENTAL, "/storage/emulated/0/Music/Marconi Union/Weightless.mp3"),
+        Track(7, "Fake Song Nonexistent ABCXYZ", "Unknown Artist", "No Album", 120000, null, TrackStatus.NO_LYRICS, "/storage/emulated/0/Music/Unknown Artist/Fake.mp3")
     )
 
     fun isPowerampInstalled(): Boolean {
@@ -60,7 +60,7 @@ class TrackRepository(
             val contentUri = Uri.parse("content://$powerampAuthority/files")
             val cursor = context.contentResolver.query(
                 contentUri,
-                arrayOf("_id", "title", "artist", "album", "duration"),
+                arrayOf("_id", "title", "artist", "album", "duration", "path"),
                 null, null, null
             )
             
@@ -70,6 +70,7 @@ class TrackRepository(
                 val artistCol = cursor.getColumnIndex("artist")
                 val albumCol = cursor.getColumnIndex("album")
                 val durationCol = cursor.getColumnIndex("duration")
+                val pathCol = cursor.getColumnIndex("path")
                 
                 while (cursor.moveToNext()) {
                     val id = if (idCol >= 0) cursor.getLong(idCol) else 0L
@@ -77,10 +78,11 @@ class TrackRepository(
                     val artist = if (artistCol >= 0) cursor.getString(artistCol) ?: "" else ""
                     val album = if (albumCol >= 0) cursor.getString(albumCol) ?: "" else ""
                     val duration = if (durationCol >= 0) cursor.getLong(durationCol) else 0L
+                    val path = if (pathCol >= 0) cursor.getString(pathCol) else null
                     
                     if (title.isNotEmpty()) {
                         tracksList.add(
-                            Track(id, title, artist, album, duration, null, TrackStatus.NO_LYRICS)
+                            Track(id, title, artist, album, duration, null, TrackStatus.NO_LYRICS, path)
                         )
                     }
                 }
