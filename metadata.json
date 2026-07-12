@@ -1,0 +1,6 @@
+{
+  "name": "Verse for Poweramp",
+  "description": "standalone lyrics manager and now playing companion for Poweramp Music Player.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
