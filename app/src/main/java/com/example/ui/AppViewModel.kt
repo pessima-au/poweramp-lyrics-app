@@ -1,6 +1,9 @@
 package com.example.ui
 
 import android.app.Application
+import android.content.Intent
+import android.net.Uri
+import java.io.File
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -179,6 +182,53 @@ class AppViewModel(
                         _plainLyrics.value = ""
                     }
                 }
+            }
+        }
+    }
+
+    fun playTrackInPoweramp(track: Track) {
+        val context = getApplication<Application>()
+        try {
+            val intent = if (track.id < 10000000L) {
+                // Poweramp native track ID
+                Intent("com.maxmpz.audioplayer.ACTION_OPEN_LIST_AND_PLAY").apply {
+                    setData(Uri.parse("content://com.maxmpz.audioplayer.data/files/${track.id}"))
+                    setPackage("com.maxmpz.audioplayer")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+            } else {
+                // Local MediaStore or other file track
+                val trackPath = track.path
+                if (!trackPath.isNullOrEmpty()) {
+                    Intent(Intent.ACTION_VIEW).apply {
+                        setDataAndType(Uri.fromFile(File(trackPath)), "audio/*")
+                        setPackage("com.maxmpz.audioplayer")
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                } else {
+                    null
+                }
+            }
+
+            if (intent != null) {
+                context.startActivity(intent)
+                Log.d("AppViewModel", "Successfully sent intent to play track: ${track.title}")
+            }
+        } catch (e: Exception) {
+            Log.e("AppViewModel", "Failed to launch play track in Poweramp", e)
+            // Fallback: simple view action
+            try {
+                val trackPath = track.path
+                if (!trackPath.isNullOrEmpty()) {
+                    val intent = Intent(Intent.ACTION_VIEW).apply {
+                        setDataAndType(Uri.fromFile(File(trackPath)), "audio/*")
+                        setPackage("com.maxmpz.audioplayer")
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    context.startActivity(intent)
+                }
+            } catch (e2: Exception) {
+                Log.e("AppViewModel", "Fallback play launch also failed", e2)
             }
         }
     }

@@ -33,6 +33,34 @@ fun LibraryScreen(
     val downloadProgress by viewModel.downloadProgress.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
 
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val permissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val granted = permissions.values.any { it }
+        if (granted) {
+            viewModel.loadTracks()
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        val permissionsToRequest = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            arrayOf(android.Manifest.permission.READ_MEDIA_AUDIO)
+        } else {
+            arrayOf(android.Manifest.permission.READ_EXTERNAL_STORAGE)
+        }
+        
+        val hasPermission = permissionsToRequest.all { perm ->
+            androidx.core.content.ContextCompat.checkSelfPermission(context, perm) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        }
+        
+        if (!hasPermission) {
+            permissionLauncher.launch(permissionsToRequest)
+        } else {
+            viewModel.loadTracks()
+        }
+    }
+
     val tabs = listOf("All", "No Lyrics", "Cached", "Instrumental")
 
     val filteredTracks = remember(tracks, selectedTab) {
@@ -150,7 +178,7 @@ fun LibraryScreen(
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            text = if (viewModel.tracks.value.isEmpty()) "Poweramp track provider not detected. Playing simulation mode." else "Everything up to date!",
+                            text = if (viewModel.tracks.value.isEmpty()) "No local music files or Poweramp tracks detected. Please ensure you have audio files stored on your phone." else "Everything up to date!",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -166,6 +194,7 @@ fun LibraryScreen(
                             onToggleSelect = { viewModel.toggleTrackSelection(track.id) },
                             onSelectTrack = {
                                 viewModel.selectTrack(track)
+                                viewModel.playTrackInPoweramp(track)
                                 viewModel.navigateTo("lyrics_view")
                             }
                         )

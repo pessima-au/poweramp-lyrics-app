@@ -19,17 +19,6 @@ class TrackRepository(
 ) {
 
     private val powerampAuthority = "com.maxmpz.audioplayer.data"
-    
-    // Static mock tracks for Phase 1 demo/preview when Poweramp is not installed
-    private val mockTracks = listOf(
-        Track(1, "Blinding Lights", "The Weeknd", "After Hours", 200000, null, TrackStatus.NO_LYRICS, "/storage/emulated/0/Music/The Weeknd/After Hours/Blinding Lights.mp3"),
-        Track(2, "Shape of You", "Ed Sheeran", "Divide", 233000, null, TrackStatus.NO_LYRICS, "/storage/emulated/0/Music/Ed Sheeran/Divide/Shape of You.mp3"),
-        Track(3, "Bohemian Rhapsody", "Queen", "A Night at the Opera", 354000, null, TrackStatus.NO_LYRICS, "/storage/emulated/0/Music/Queen/A Night at the Opera/Bohemian Rhapsody.mp3"),
-        Track(4, "Stay", "The Kid LAROI & Justin Bieber", "F*CK LOVE 3: OVER YOU", 141000, null, TrackStatus.NO_LYRICS, "/storage/emulated/0/Music/The Kid LAROI/Stay.mp3"),
-        Track(5, "Hotel California", "Eagles", "Hotel California", 390000, null, TrackStatus.NO_LYRICS, "/storage/emulated/0/Music/Eagles/Hotel California.mp3"),
-        Track(6, "Weightless", "Marconi Union", "Ambient Transmissions Volume 2", 480000, null, TrackStatus.INSTRUMENTAL, "/storage/emulated/0/Music/Marconi Union/Weightless.mp3"),
-        Track(7, "Fake Song Nonexistent ABCXYZ", "Unknown Artist", "No Album", 120000, null, TrackStatus.NO_LYRICS, "/storage/emulated/0/Music/Unknown Artist/Fake.mp3")
-    )
 
     fun isPowerampInstalled(): Boolean {
         return try {
@@ -53,9 +42,12 @@ class TrackRepository(
         }
     }
 
-    suspend fun getTracks(useMockFallback: Boolean = true): List<Track> = withContext(Dispatchers.IO) {
+    suspend fun getTracks(useMockFallback: Boolean = false): List<Track> = withContext(Dispatchers.IO) {
         val tracksList = mutableListOf<Track>()
-        
+        val seenPaths = mutableSetOf<String>()
+        val seenTitlesAndArtists = mutableSetOf<Pair<String, String>>()
+
+        // 1. Scan Poweramp tracks if available
         try {
             val contentUri = Uri.parse("content://$powerampAuthority/files")
             val cursor = context.contentResolver.query(
@@ -81,20 +73,136 @@ class TrackRepository(
                     val path = if (pathCol >= 0) cursor.getString(pathCol) else null
                     
                     if (title.isNotEmpty()) {
-                        tracksList.add(
-                            Track(id, title, artist, album, duration, null, TrackStatus.NO_LYRICS, path)
-                        )
+                        val track = Track(id, title, artist, album, duration, null, TrackStatus.NO_LYRICS, path)
+                        tracksList.add(track)
+                        if (path != null) {
+                            seenPaths.add(path)
+                        }
+                        seenTitlesAndArtists.add(Pair(title.lowercase(), artist.lowercase()))
                     }
                 }
                 cursor.close()
             }
         } catch (e: Exception) {
-            Log.e("TrackRepository", "Failed to query Poweramp Content Provider, using fallbacks", e)
+            Log.e("TrackRepository", "Failed to query Poweramp Content Provider", e)
         }
 
-        if (tracksList.isEmpty() && useMockFallback) {
-            // Poweramp not installed or empty library, return mock tracks
-            tracksList.addAll(mockTracks)
+        // 2. Scan standard MediaStore local music files
+        try {
+            val uri = android.provider.MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+            val projection = arrayOf(
+                android.provider.MediaStore.Audio.Media._ID,
+                android.provider.MediaStore.Audio.Media.TITLE,
+                android.provider.MediaStore.Audio.Media.ARTIST,
+                android.provider.MediaStore.Audio.Media.ALBUM,
+                android.provider.MediaStore.Audio.Media.DURATION,
+                android.provider.MediaStore.Audio.Media.DATA
+            )
+            val selection = "${android.provider.MediaStore.Audio.Media.IS_MUSIC} != 0"
+            context.contentResolver.query(uri, projection, selection, null, null)?.use { cursor ->
+                val idCol = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Audio.Media._ID)
+                val titleCol = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Audio.Media.TITLE)
+                val artistCol = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Audio.Media.ARTIST)
+                val albumCol = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Audio.Media.ALBUM)
+                val durationCol = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Audio.Media.DURATION)
+                val pathCol = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Audio.Media.DATA)
+                
+                while (cursor.moveToNext()) {
+                    val id = cursor.getLong(idCol)
+                    val title = cursor.getString(titleCol) ?: ""
+                    val artist = cursor.getString(artistCol) ?: ""
+                    val album = cursor.getString(albumCol) ?: ""
+                    val duration = cursor.getLong(durationCol)
+                    val path = cursor.getString(pathCol) ?: ""
+                    
+                    if (title.isNotEmpty() && duration > 10000) {
+                        val titleLower = title.lowercase()
+                        val artistLower = artist.lowercase()
+                        // Deduplicate if we already saw the same file path or title-artist combo
+                        if (!seenPaths.contains(path) && !seenTitlesAndArtists.contains(Pair(titleLower, artistLower))) {
+                            tracksList.add(
+                                Track(
+                                    id = 10000000L + id, // offset to avoid conflict with Poweramp IDs
+                                    title = title,
+                                    artist = if (artist == "<unknown>") "Unknown Artist" else artist,
+                                    album = if (album == "<unknown>") "Unknown Album" else album,
+                                    durationMs = duration,
+                                    albumArtUri = null,
+                                    status = TrackStatus.NO_LYRICS,
+                                    path = path
+                                )
+                            )
+                            if (path.isNotEmpty()) {
+                                seenPaths.add(path)
+                            }
+                            seenTitlesAndArtists.add(Pair(titleLower, artistLower))
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("TrackRepository", "Error querying local MediaStore", e)
+        }
+
+        // 3. Scan and auto-import local sidecar LRC/TXT lyric files
+        tracksList.forEach { track ->
+            val path = track.path
+            if (!path.isNullOrEmpty()) {
+                try {
+                    val file = java.io.File(path)
+                    val lastDot = path.lastIndexOf('.')
+                    val lrcPath = if (lastDot != -1) path.substring(0, lastDot) + ".lrc" else "$path.lrc"
+                    val txtPath = if (lastDot != -1) path.substring(0, lastDot) + ".txt" else "$path.txt"
+                    
+                    var localLrcContent: String? = null
+                    val lrcFile = java.io.File(lrcPath)
+                    val txtFile = java.io.File(txtPath)
+                    
+                    if (lrcFile.exists()) {
+                        localLrcContent = lrcFile.readText()
+                    } else if (txtFile.exists()) {
+                        localLrcContent = txtFile.readText()
+                    } else {
+                        // Check standard shared lyrics directory /storage/emulated/0/Lyrics/
+                        val cleanTitle = track.title.trim().replace("[\\\\/:*?\"<>|]".toRegex(), "_")
+                        val cleanArtist = track.artist.trim().replace("[\\\\/:*?\"<>|]".toRegex(), "_")
+                        val candidateFiles = listOf(
+                            java.io.File("/storage/emulated/0/Lyrics/${cleanArtist}_${cleanTitle}.lrc"),
+                            java.io.File("/storage/emulated/0/Lyrics/${cleanTitle}_${cleanArtist}.lrc"),
+                            java.io.File("/storage/emulated/0/Lyrics/${cleanTitle}.lrc")
+                        )
+                        val foundFile = candidateFiles.firstOrNull { it.exists() }
+                        if (foundFile != null) {
+                            localLrcContent = foundFile.readText()
+                        }
+                    }
+                    
+                    if (!localLrcContent.isNullOrBlank()) {
+                        val key = CachedLyricsEntity.generateKey(track.title, track.artist, track.album, track.durationMs)
+                        val existing = lyricsDao.getLyricsByKey(key)
+                        if (existing == null) {
+                            val isSynced = localLrcContent.contains("[") && localLrcContent.contains("]")
+                            val entity = CachedLyricsEntity(
+                                trackKey = key,
+                                title = track.title,
+                                artist = track.artist,
+                                album = track.album,
+                                durationMs = track.durationMs,
+                                plainLyrics = if (!isSynced) localLrcContent else null,
+                                syncedLyrics = if (isSynced) localLrcContent else null,
+                                source = "Local File Scan",
+                                confidenceScore = 100,
+                                isInstrumental = false,
+                                isUserEdited = false
+                            )
+                            lyricsDao.insertLyrics(entity)
+                            Log.i("TrackRepository", "Auto-detected and imported local lyric file for ${track.title}")
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w("TrackRepository", "Error checking sidecar lyric files for path: $path", e)
+                }
+            }
         }
 
         // Map status against local Room database cache
