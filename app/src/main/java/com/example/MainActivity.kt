@@ -13,6 +13,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
 import com.example.data.local.AppDatabase
 import com.example.data.local.SettingsManager
 import com.example.data.repository.LyricsRepository
@@ -47,6 +50,16 @@ class MainActivity : ComponentActivity() {
         viewModel = ViewModelProvider(this, viewModelFactory)[AppViewModel::class.java]
 
         handleIntent(intent)
+
+        lifecycleScope.launch {
+            viewModel.floatingLyricsEnabled.collectLatest { enabled ->
+                if (enabled) {
+                    if (android.provider.Settings.canDrawOverlays(this@MainActivity)) {
+                        com.example.FloatingLyricsOverlayService.start(this@MainActivity)
+                    }
+                }
+            }
+        }
 
         enableEdgeToEdge()
         
@@ -138,6 +151,16 @@ class MainActivity : ComponentActivity() {
             val durationMs = trackBundle?.getInt(PowerampAPI.Track.DURATION_MS, 0)?.toLong() ?: intent.getIntExtra(PowerampAPI.Track.DURATION_MS, 0).toLong()
             if (title.isNotEmpty()) {
                 viewModel.handleLyricsLinkIntent(title, artist, album, durationMs)
+            }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        lifecycleScope.launch {
+            val enabled = viewModel.floatingLyricsEnabled.value
+            if (enabled && android.provider.Settings.canDrawOverlays(this@MainActivity)) {
+                com.example.FloatingLyricsOverlayService.start(this@MainActivity)
             }
         }
     }

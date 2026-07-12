@@ -37,6 +37,12 @@ class LyricsRepository(
         if (!forceRefresh) {
             val cached = lyricsDao.getLyricsByKey(key)
             if (cached != null) return@withContext cached
+
+            val titleArtistCached = lyricsDao.getLyricsByTitleAndArtist(title, artist)
+            if (titleArtistCached != null) {
+                Log.d("LyricsRepository", "Found cached lyrics via title/artist fallback for: $title - $artist")
+                return@withContext titleArtistCached
+            }
         }
 
         // Try LRCLIB exact match

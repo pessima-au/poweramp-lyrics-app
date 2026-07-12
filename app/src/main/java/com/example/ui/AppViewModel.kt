@@ -124,6 +124,7 @@ class AppViewModel(
     val immersiveAlignment = settingsManager.immersiveAlignmentFlow.stateIn(viewModelScope, SharingStarted.Eagerly, "center")
     val immersiveTextShadow = settingsManager.immersiveTextShadowFlow.stateIn(viewModelScope, SharingStarted.Eagerly, true)
     val userPresets = settingsManager.userPresetsFlow.stateIn(viewModelScope, SharingStarted.Eagerly, "")
+    val floatingLyricsEnabled = settingsManager.floatingLyricsEnabledFlow.stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     init {
         loadTracks()
@@ -505,6 +506,17 @@ class AppViewModel(
     fun setImmersiveFontSize(size: Float) = viewModelScope.launch { settingsManager.setImmersiveFontSize(size) }
     fun setImmersiveAlignment(alignment: String) = viewModelScope.launch { settingsManager.setImmersiveAlignment(alignment) }
     fun setImmersiveTextShadow(enabled: Boolean) = viewModelScope.launch { settingsManager.setImmersiveTextShadow(enabled) }
+    
+    fun setFloatingLyricsEnabled(enabled: Boolean) = viewModelScope.launch {
+        settingsManager.setFloatingLyricsEnabled(enabled)
+        if (enabled) {
+            if (android.provider.Settings.canDrawOverlays(getApplication())) {
+                com.example.FloatingLyricsOverlayService.start(getApplication())
+            }
+        } else {
+            com.example.FloatingLyricsOverlayService.stop(getApplication())
+        }
+    }
 
     fun clearCache() = viewModelScope.launch {
         lyricsRepository.clearCache()

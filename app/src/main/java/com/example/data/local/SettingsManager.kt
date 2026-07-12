@@ -28,6 +28,7 @@ class SettingsManager(private val context: Context) {
         val IMMERSIVE_ALIGNMENT = stringPreferencesKey("immersive_alignment") // "left", "center"
         val IMMERSIVE_TEXT_SHADOW = booleanPreferencesKey("immersive_text_shadow")
         val USER_PRESETS = stringPreferencesKey("user_presets")
+        val FLOATING_LYRICS_ENABLED = booleanPreferencesKey("floating_lyrics_enabled")
     }
 
     val themeModeFlow: Flow<String> = context.dataStore.data.map { preferences ->
@@ -92,6 +93,10 @@ class SettingsManager(private val context: Context) {
 
     val userPresetsFlow: Flow<String> = context.dataStore.data.map { preferences ->
         preferences[USER_PRESETS] ?: ""
+    }
+
+    val floatingLyricsEnabledFlow: Flow<Boolean> = context.dataStore.data.map { preferences ->
+        preferences[FLOATING_LYRICS_ENABLED] ?: false
     }
 
     suspend fun setThemeMode(mode: String) {
@@ -187,6 +192,12 @@ class SettingsManager(private val context: Context) {
     suspend fun setUserPresets(presets: String) {
         context.dataStore.edit { preferences ->
             preferences[USER_PRESETS] = presets
+        }
+    }
+
+    suspend fun setFloatingLyricsEnabled(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[FLOATING_LYRICS_ENABLED] = enabled
         }
     }
 }

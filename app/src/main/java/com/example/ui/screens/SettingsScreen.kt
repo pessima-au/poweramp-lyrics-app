@@ -9,6 +9,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -31,6 +32,7 @@ fun SettingsScreen(
     val storageDestination by viewModel.storageDestination.collectAsState()
     val geminiApiKey by viewModel.geminiApiKey.collectAsState()
     val matchingThreshold by viewModel.matchingThreshold.collectAsState()
+    val floatingLyricsEnabled by viewModel.floatingLyricsEnabled.collectAsState()
 
     // Immersive custom preferences
     val fontFamily by viewModel.immersiveFontFamily.collectAsState()
@@ -201,21 +203,21 @@ fun SettingsScreen(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text("Storage Destination", fontWeight = FontWeight.SemiBold)
-                            Text("Current: ${storageDestination.replaceFirstChar { it.uppercase() }}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("Current: ${if (storageDestination == "lrc") "Save LRC files next to track / shared folder" else if (storageDestination == "embed") "Embed metadata tags (experimental)" else "Local Cache Only"}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         var expandedStorage by remember { mutableStateOf(false) }
                         Box {
                             Button(onClick = { expandedStorage = true }) {
                                 Text(when(storageDestination) {
-                                    "lrc" -> "Save .lrc file (Phase 2 Plugin)"
-                                    "embed" -> "Embed tag (Phase 2 Plugin)"
+                                    "lrc" -> "Save .lrc files"
+                                    "embed" -> "Embed tag (Experimental)"
                                     else -> "Local Cache Only"
                                 })
                             }
                             DropdownMenu(expanded = expandedStorage, onDismissRequest = { expandedStorage = false }) {
                                 DropdownMenuItem(text = { Text("Local Cache Only") }, onClick = { viewModel.setStorageDestination("cache"); expandedStorage = false })
-                                DropdownMenuItem(text = { Text("Save .lrc file (Coming in plugin update)") }, onClick = { viewModel.setStorageDestination("lrc"); expandedStorage = false })
-                                DropdownMenuItem(text = { Text("Embed tag (Coming in plugin update)") }, onClick = { viewModel.setStorageDestination("embed"); expandedStorage = false })
+                                DropdownMenuItem(text = { Text("Save .lrc files next to track / shared folder") }, onClick = { viewModel.setStorageDestination("lrc"); expandedStorage = false })
+                                DropdownMenuItem(text = { Text("Embed tag (Experimental)") }, onClick = { viewModel.setStorageDestination("embed"); expandedStorage = false })
                             }
                         }
                     }
@@ -322,6 +324,119 @@ fun SettingsScreen(
                         Switch(
                             checked = textShadow,
                             onCheckedChange = { viewModel.setImmersiveTextShadow(it) }
+                        )
+                    }
+                }
+            }
+
+            // Category: Floating Lyrics Overlay
+            SettingsSectionHeader(title = "Floating Overlay", icon = Icons.Default.Layers)
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    val context = LocalContext.current
+                    var showPermissionDialog by remember { mutableStateOf(false) }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Enable Floating Lyrics", fontWeight = FontWeight.SemiBold)
+                            Text("Display synced lyrics in a draggable overlay on top of other apps", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Switch(
+                            checked = floatingLyricsEnabled,
+                            onCheckedChange = { checked ->
+                                if (checked) {
+                                    if (android.provider.Settings.canDrawOverlays(context)) {
+                                        viewModel.setFloatingLyricsEnabled(true)
+                                    } else {
+                                        showPermissionDialog = true
+                                    }
+                                } else {
+                                    viewModel.setFloatingLyricsEnabled(false)
+                                }
+                            },
+                            modifier = Modifier.testTag("floating_lyrics_switch")
+                        )
+                    }
+
+                    if (showPermissionDialog) {
+                        AlertDialog(
+                            onDismissRequest = { showPermissionDialog = false },
+                            title = { Text("Overlay Permission Required", fontWeight = FontWeight.Bold) },
+                            text = { Text("To display lyrics on top of other apps, this app needs the 'Display over other apps' (SYSTEM_ALERT_WINDOW) system permission. Please grant it in the next screen.") },
+                            confirmButton = {
+                                Button(
+                                    onClick = {
+                                        showPermissionDialog = false
+                                        val intent = android.content.Intent(
+                                            android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                            android.net.Uri.parse("package:${context.packageName}")
+                                        )
+                                        context.startActivity(intent)
+                                    }
+                                ) {
+                                    Text("Grant Permission")
+                                }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = { showPermissionDialog = false }) {
+                                    Text("Cancel")
+                                }
+                            }
+                        )
+                    }
+                }
+            }
+
+            // Category: Poweramp Integration
+            SettingsSectionHeader(title = "Poweramp Integration", icon = Icons.Default.MusicNote)
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        text = "Poweramp Lyrics Provider",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "This app acts as an official Poweramp lyrics plugin. When Poweramp plays a track, it automatically fetches and displays lyrics directly inside Poweramp's built-in lyric window.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Divider()
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Automatic Lyric Feeding", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium)
+                            Text("Feeds lyric text and synchronized LRC timelines directly to Poweramp on play.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Icon(
+                            imageVector = Icons.Default.CheckCircle,
+                            contentDescription = "Active",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("LRC File Saving", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium)
+                            Text("Writes downloaded lyric files (.lrc) next to music files or to the public shared folder.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        val isLrcEnabled = storageDestination == "lrc"
+                        Text(
+                            text = if (isLrcEnabled) "Enabled" else "Disabled",
+                            color = if (isLrcEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Bold
                         )
                     }
                 }

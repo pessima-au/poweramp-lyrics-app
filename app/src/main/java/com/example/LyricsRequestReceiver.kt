@@ -5,12 +5,15 @@ import android.content.Context
 import android.content.Intent
 import android.util.Log
 import com.example.data.local.AppDatabase
+import com.example.data.local.SettingsManager
 import com.example.data.repository.LyricsRepository
 import com.maxmpz.poweramp.player.PowerampAPI
 import com.maxmpz.poweramp.player.PowerampAPIHelper
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
+import java.io.File
 
 class LyricsRequestReceiver : BroadcastReceiver() {
     companion object {
@@ -29,22 +32,30 @@ class LyricsRequestReceiver : BroadcastReceiver() {
             val artist = intent.getStringExtra(PowerampAPI.Track.ARTIST) ?: ""
             val album = intent.getStringExtra(PowerampAPI.Track.ALBUM) ?: ""
             val durationMs = intent.getIntExtra(PowerampAPI.Track.DURATION_MS, 0).toLong()
+            val trackPath = intent.getStringExtra(PowerampAPI.Track.PATH)
 
-            Log.d(TAG, "onReceive: realId=$realId, title=$title, artist=$artist, album=$album, durationMs=$durationMs")
+            Log.d(TAG, "onReceive: realId=$realId, title=$title, artist=$artist, album=$album, durationMs=$durationMs, trackPath=$trackPath")
 
             // Show status notification via Foreground Service
             LyricsService.startForLyricsRequest(context, title, artist)
 
             val db = AppDatabase.getDatabase(context.applicationContext)
             val lyricsRepository = LyricsRepository(db.lyricsDao())
+            val settingsManager = SettingsManager(context.applicationContext)
 
             CoroutineScope(Dispatchers.IO).launch {
                 try {
+                    val storageDest = settingsManager.storageDestinationFlow.firstOrNull() ?: "cache"
+
                     // Try exact match (checks cache first, LRCLIB second)
                     val lyricsEntity = lyricsRepository.getLyricsForTrack(title, artist, album, durationMs)
                     if (lyricsEntity != null) {
                         val lyricsText = lyricsEntity.syncedLyrics ?: lyricsEntity.plainLyrics
                         if (!lyricsText.isNullOrEmpty()) {
+                            if (storageDest == "lrc") {
+                                writeLrcFileForTrack(context, trackPath, title, artist, lyricsText)
+                            }
+
                             val responseIntent = Intent(PowerampAPI.Lyrics.ACTION_UPDATE_LYRICS)
                             responseIntent.putExtra(PowerampAPI.EXTRA_ID, realId)
                             responseIntent.putExtra(PowerampAPI.Lyrics.EXTRA_LYRICS, lyricsText)
@@ -68,6 +79,10 @@ class LyricsRequestReceiver : BroadcastReceiver() {
                             // Cache the candidate
                             lyricsRepository.selectCandidateAndSave(title, artist, album, durationMs, bestResult)
                             
+                            if (storageDest == "lrc") {
+                                writeLrcFileForTrack(context, trackPath, title, artist, lyricsText)
+                            }
+
                             val responseIntent = Intent(PowerampAPI.Lyrics.ACTION_UPDATE_LYRICS)
                             responseIntent.putExtra(PowerampAPI.EXTRA_ID, realId)
                             responseIntent.putExtra(PowerampAPI.Lyrics.EXTRA_LYRICS, lyricsText)
@@ -92,6 +107,62 @@ class LyricsRequestReceiver : BroadcastReceiver() {
                     LyricsService.updateStatus(context, "Failed lookup: $title")
                 }
             }
+        }
+    }
+
+    private fun writeLrcFileForTrack(context: Context, trackPath: String?, title: String, artist: String, lrcContent: String) {
+        if (trackPath.isNullOrEmpty() || lrcContent.isNullOrEmpty()) return
+        Log.d(TAG, "Attempting to save LRC file for: $title - $artist. TrackPath: $trackPath")
+
+        // 1. Try next to the track file (the standard Poweramp local file location)
+        try {
+            val lastDot = trackPath.lastIndexOf('.')
+            val lrcPath = if (lastDot != -1) {
+                trackPath.substring(0, lastDot) + ".lrc"
+            } else {
+                "$trackPath.lrc"
+            }
+
+            val lrcFile = File(lrcPath)
+            val parentDir = lrcFile.parentFile
+            if (parentDir != null && parentDir.exists()) {
+                lrcFile.writeText(lrcContent)
+                Log.i(TAG, "Successfully wrote LRC next to track file: $lrcPath")
+                return
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to write LRC next to track (Scoped Storage restrictions likely): ${e.message}")
+        }
+
+        // 2. Fallback: Write to public shared directory /storage/emulated/0/Lyrics/
+        try {
+            val sharedLyricsDir = File("/storage/emulated/0/Lyrics")
+            if (!sharedLyricsDir.exists()) {
+                sharedLyricsDir.mkdirs()
+            }
+            val fileName = "${artist.trim()}_${title.trim()}.lrc"
+                .replace("[\\\\/:*?\"<>|]".toRegex(), "_")
+            val lrcFile = File(sharedLyricsDir, fileName)
+            lrcFile.writeText(lrcContent)
+            Log.i(TAG, "Successfully wrote LRC to shared Lyrics folder: ${lrcFile.absolutePath}")
+            return
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to write LRC to shared Lyrics folder: ${e.message}")
+        }
+
+        // 3. App-specific external storage (always writable)
+        try {
+            val appLyricsDir = File(context.getExternalFilesDir(null), "lyrics")
+            if (!appLyricsDir.exists()) {
+                appLyricsDir.mkdirs()
+            }
+            val fileName = "${artist.trim()}_${title.trim()}.lrc"
+                .replace("[\\\\/:*?\"<>|]".toRegex(), "_")
+            val lrcFile = File(appLyricsDir, fileName)
+            lrcFile.writeText(lrcContent)
+            Log.i(TAG, "Successfully wrote LRC to app external files folder: ${lrcFile.absolutePath}")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to write LRC to app-specific external folder", e)
         }
     }
 }

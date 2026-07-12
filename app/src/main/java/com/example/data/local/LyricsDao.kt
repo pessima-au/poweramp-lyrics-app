@@ -18,6 +18,9 @@ interface LyricsDao {
     @Query("SELECT * FROM cached_lyrics WHERE trackKey = :trackKey LIMIT 1")
     suspend fun getLyricsByKey(trackKey: String): CachedLyricsEntity?
 
+    @Query("SELECT * FROM cached_lyrics WHERE LOWER(title) = LOWER(:title) AND LOWER(artist) = LOWER(:artist) LIMIT 1")
+    suspend fun getLyricsByTitleAndArtist(title: String, artist: String): CachedLyricsEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertLyrics(lyrics: CachedLyricsEntity)
 
