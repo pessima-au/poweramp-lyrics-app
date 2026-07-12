@@ -4,7 +4,9 @@ import android.content.Context
 import android.net.Uri
 import android.util.Log
 import com.example.data.local.LyricsDao
+import com.example.data.local.TrackDao
 import com.example.data.model.CachedLyricsEntity
+import com.example.data.model.ScannedTrackEntity
 import com.example.data.model.Track
 import com.example.data.model.TrackStatus
 import kotlinx.coroutines.Dispatchers
@@ -15,7 +17,8 @@ import kotlinx.coroutines.withContext
 
 class TrackRepository(
     private val context: Context,
-    private val lyricsDao: LyricsDao
+    private val lyricsDao: LyricsDao,
+    private val trackDao: TrackDao
 ) {
 
     private val powerampAuthority = "com.maxmpz.audioplayer.data"
@@ -87,61 +90,51 @@ class TrackRepository(
             Log.e("TrackRepository", "Failed to query Poweramp Content Provider", e)
         }
 
-        // 2. Scan standard MediaStore local music files
+        // 2. Read scanned standard MediaStore local music files from database cache
         try {
-            val uri = android.provider.MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
-            val projection = arrayOf(
-                android.provider.MediaStore.Audio.Media._ID,
-                android.provider.MediaStore.Audio.Media.TITLE,
-                android.provider.MediaStore.Audio.Media.ARTIST,
-                android.provider.MediaStore.Audio.Media.ALBUM,
-                android.provider.MediaStore.Audio.Media.DURATION,
-                android.provider.MediaStore.Audio.Media.DATA
-            )
-            val selection = "${android.provider.MediaStore.Audio.Media.IS_MUSIC} != 0"
-            context.contentResolver.query(uri, projection, selection, null, null)?.use { cursor ->
-                val idCol = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Audio.Media._ID)
-                val titleCol = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Audio.Media.TITLE)
-                val artistCol = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Audio.Media.ARTIST)
-                val albumCol = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Audio.Media.ALBUM)
-                val durationCol = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Audio.Media.DURATION)
-                val pathCol = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Audio.Media.DATA)
+            var dbTracks = trackDao.getAllTracks()
+            if (dbTracks.isEmpty()) {
+                Log.d("TrackRepository", "Track database cache is empty. Running synchronous fallback scan...")
+                val fallbackList = runSynchronousFallbackScan()
+                if (fallbackList.isNotEmpty()) {
+                    trackDao.insertTracks(fallbackList)
+                    dbTracks = fallbackList
+                }
+            }
+            
+            dbTracks.forEach { dbTrack ->
+                val id = dbTrack.id
+                val title = dbTrack.title
+                val artist = dbTrack.artist
+                val album = dbTrack.album
+                val duration = dbTrack.durationMs
+                val path = dbTrack.path ?: ""
                 
-                while (cursor.moveToNext()) {
-                    val id = cursor.getLong(idCol)
-                    val title = cursor.getString(titleCol) ?: ""
-                    val artist = cursor.getString(artistCol) ?: ""
-                    val album = cursor.getString(albumCol) ?: ""
-                    val duration = cursor.getLong(durationCol)
-                    val path = cursor.getString(pathCol) ?: ""
-                    
-                    if (title.isNotEmpty() && duration > 10000) {
-                        val titleLower = title.lowercase()
-                        val artistLower = artist.lowercase()
-                        // Deduplicate if we already saw the same file path or title-artist combo
-                        if (!seenPaths.contains(path) && !seenTitlesAndArtists.contains(Pair(titleLower, artistLower))) {
-                            tracksList.add(
-                                Track(
-                                    id = 10000000L + id, // offset to avoid conflict with Poweramp IDs
-                                    title = title,
-                                    artist = if (artist == "<unknown>") "Unknown Artist" else artist,
-                                    album = if (album == "<unknown>") "Unknown Album" else album,
-                                    durationMs = duration,
-                                    albumArtUri = null,
-                                    status = TrackStatus.NO_LYRICS,
-                                    path = path
-                                )
-                            )
-                            if (path.isNotEmpty()) {
-                                seenPaths.add(path)
-                            }
-                            seenTitlesAndArtists.add(Pair(titleLower, artistLower))
-                        }
+                val titleLower = title.lowercase()
+                val artistLower = artist.lowercase()
+                
+                // Deduplicate if we already saw the same file path or title-artist combo
+                if (!seenPaths.contains(path) && !seenTitlesAndArtists.contains(Pair(titleLower, artistLower))) {
+                    tracksList.add(
+                        Track(
+                            id = 10000000L + id, // offset to avoid conflict with Poweramp IDs
+                            title = title,
+                            artist = artist,
+                            album = album,
+                            durationMs = duration,
+                            albumArtUri = null,
+                            status = TrackStatus.NO_LYRICS,
+                            path = path
+                        )
+                    )
+                    if (path.isNotEmpty()) {
+                        seenPaths.add(path)
                     }
+                    seenTitlesAndArtists.add(Pair(titleLower, artistLower))
                 }
             }
         } catch (e: Exception) {
-            Log.e("TrackRepository", "Error querying local MediaStore", e)
+            Log.e("TrackRepository", "Error loading scanned tracks from local database", e)
         }
 
         // 3. Scan and auto-import local sidecar LRC/TXT lyric files
@@ -217,5 +210,73 @@ class TrackRepository(
             }
             track.copy(status = updatedStatus)
         }
+    }
+
+    private suspend fun runSynchronousFallbackScan(): List<ScannedTrackEntity> = withContext(Dispatchers.IO) {
+        val list = mutableListOf<ScannedTrackEntity>()
+        val validExtensions = setOf("mp3", "flac", "m4a", "ogg", "wav", "aac", "wma", "opus", "mka", "ape")
+        try {
+            val uri = android.provider.MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+            val projection = arrayOf(
+                android.provider.MediaStore.Audio.Media._ID,
+                android.provider.MediaStore.Audio.Media.TITLE,
+                android.provider.MediaStore.Audio.Media.ARTIST,
+                android.provider.MediaStore.Audio.Media.ALBUM,
+                android.provider.MediaStore.Audio.Media.DURATION,
+                android.provider.MediaStore.Audio.Media.DATA,
+                android.provider.MediaStore.Audio.Media.MIME_TYPE
+            )
+            val selection = "${android.provider.MediaStore.Audio.Media.IS_MUSIC} != 0 " +
+                    "AND ${android.provider.MediaStore.Audio.Media.DURATION} >= 10000 " +
+                    "AND (${android.provider.MediaStore.Audio.Media.MIME_TYPE} LIKE 'audio/%' " +
+                    "OR ${android.provider.MediaStore.Audio.Media.DATA} LIKE '%.mp3' " +
+                    "OR ${android.provider.MediaStore.Audio.Media.DATA} LIKE '%.flac' " +
+                    "OR ${android.provider.MediaStore.Audio.Media.DATA} LIKE '%.m4a' " +
+                    "OR ${android.provider.MediaStore.Audio.Media.DATA} LIKE '%.ogg' " +
+                    "OR ${android.provider.MediaStore.Audio.Media.DATA} LIKE '%.wav' " +
+                    "OR ${android.provider.MediaStore.Audio.Media.DATA} LIKE '%.aac' " +
+                    "OR ${android.provider.MediaStore.Audio.Media.DATA} LIKE '%.opus')"
+                    
+            context.contentResolver.query(uri, projection, selection, null, null)?.use { cursor ->
+                val idCol = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Audio.Media._ID)
+                val titleCol = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Audio.Media.TITLE)
+                val artistCol = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Audio.Media.ARTIST)
+                val albumCol = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Audio.Media.ALBUM)
+                val durationCol = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Audio.Media.DURATION)
+                val pathCol = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Audio.Media.DATA)
+                
+                while (cursor.moveToNext()) {
+                    val id = cursor.getLong(idCol)
+                    val title = cursor.getString(titleCol) ?: ""
+                    val artist = cursor.getString(artistCol) ?: ""
+                    val album = cursor.getString(albumCol) ?: ""
+                    val duration = cursor.getLong(durationCol)
+                    val path = cursor.getString(pathCol) ?: ""
+                    
+                    if (title.isNotEmpty() && path.isNotEmpty()) {
+                        val ext = path.substringAfterLast('.', "").lowercase()
+                        if (validExtensions.contains(ext)) {
+                            val file = java.io.File(path)
+                            if (file.exists()) {
+                                list.add(
+                                    ScannedTrackEntity(
+                                        id = id,
+                                        title = title,
+                                        artist = if (artist == "<unknown>") "Unknown Artist" else artist,
+                                        album = if (album == "<unknown>") "Unknown Album" else album,
+                                        durationMs = duration,
+                                        path = path,
+                                        isPoweramp = false
+                                    )
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("TrackRepository", "Error in synchronous fallback scan", e)
+        }
+        return@withContext list
     }
 }

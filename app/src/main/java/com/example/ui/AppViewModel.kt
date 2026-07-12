@@ -53,6 +53,9 @@ class AppViewModel(
     private val _tracks = MutableStateFlow<List<Track>>(emptyList())
     val tracks: StateFlow<List<Track>> = _tracks.asStateFlow()
 
+    private val _isScanning = MutableStateFlow<Boolean>(false)
+    val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
+
     private val _selectedTab = MutableStateFlow<String>("All")
     val selectedTab: StateFlow<String> = _selectedTab.asStateFlow()
 
@@ -143,11 +146,59 @@ class AppViewModel(
             try {
                 val list = trackRepository.getTracks()
                 _tracks.value = list
+                
+                // Trigger the background scan worker to refresh and optimize the library silently
+                triggerBackgroundScan()
             } catch (e: Exception) {
                 Log.e("AppViewModel", "Failed to load tracks", e)
             } finally {
                 _isLoading.value = false
             }
+        }
+    }
+
+    fun triggerBackgroundScan() {
+        val context = getApplication<Application>()
+        try {
+            val constraints = androidx.work.Constraints.Builder()
+                .setRequiredNetworkType(androidx.work.NetworkType.NOT_REQUIRED)
+                .build()
+                
+            val scanRequest = androidx.work.OneTimeWorkRequestBuilder<com.example.util.MediaScanWorker>()
+                .setConstraints(constraints)
+                .build()
+                
+            val workManager = androidx.work.WorkManager.getInstance(context)
+            workManager.enqueueUniqueWork(
+                "MediaStoreScanWork",
+                androidx.work.ExistingWorkPolicy.REPLACE,
+                scanRequest
+            )
+            
+            // Observe work state to automatically reload tracks once the scan completes!
+            viewModelScope.launch {
+                workManager.getWorkInfoByIdFlow(scanRequest.id).collect { workInfo ->
+                    if (workInfo != null) {
+                        when (workInfo.state) {
+                            androidx.work.WorkInfo.State.RUNNING, androidx.work.WorkInfo.State.ENQUEUED -> {
+                                _isScanning.value = true
+                            }
+                            androidx.work.WorkInfo.State.SUCCEEDED, androidx.work.WorkInfo.State.FAILED, androidx.work.WorkInfo.State.CANCELLED -> {
+                                _isScanning.value = false
+                                Log.d("AppViewModel", "Background scan worker completed with state: ${workInfo.state}. Reloading library.")
+                                val updatedList = trackRepository.getTracks()
+                                _tracks.value = updatedList
+                            }
+                            else -> {
+                                _isScanning.value = false
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("AppViewModel", "Failed to enqueue MediaScanWorker", e)
+            _isScanning.value = false
         }
     }
 
@@ -213,6 +264,36 @@ class AppViewModel(
             if (intent != null) {
                 context.startActivity(intent)
                 Log.d("AppViewModel", "Successfully sent intent to play track: ${track.title}")
+                
+                // Also trigger standard lyric display activity
+                try {
+                    val mainIntent = Intent("com.maxmpz.audioplayer.ACTION_OPEN_MAIN").apply {
+                        setPackage("com.maxmpz.audioplayer")
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        putExtra("open", "lyrics")
+                    }
+                    context.startActivity(mainIntent)
+                } catch (e: Exception) {
+                    Log.e("AppViewModel", "Failed to open main Poweramp UI", e)
+                }
+
+                // Proactively update lyrics in Poweramp
+                viewModelScope.launch {
+                    try {
+                        val entity = lyricsRepository.getLyricsForTrack(track.title, track.artist, track.album, track.durationMs)
+                        val text = entity?.syncedLyrics ?: entity?.plainLyrics
+                        if (!text.isNullOrEmpty()) {
+                            val updateIntent = Intent(PowerampAPI.Lyrics.ACTION_UPDATE_LYRICS)
+                            updateIntent.putExtra(PowerampAPI.EXTRA_ID, track.id)
+                            updateIntent.putExtra(PowerampAPI.Lyrics.EXTRA_LYRICS, text)
+                            updateIntent.putExtra(PowerampAPI.Lyrics.EXTRA_INFO_LINE, "Verse Lyrics")
+                            com.maxmpz.poweramp.player.PowerampAPIHelper.sendPAIntent(context, updateIntent)
+                            Log.d("AppViewModel", "Proactively sent ACTION_UPDATE_LYRICS to Poweramp")
+                        }
+                    } catch (e: Exception) {
+                        Log.e("AppViewModel", "Failed to proactively send lyrics", e)
+                    }
+                }
             }
         } catch (e: Exception) {
             Log.e("AppViewModel", "Failed to launch play track in Poweramp", e)

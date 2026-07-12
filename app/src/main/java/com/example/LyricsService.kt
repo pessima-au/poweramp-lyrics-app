@@ -140,7 +140,7 @@ class LyricsService : Service() {
             try {
                 val db = AppDatabase.getDatabase(applicationContext)
                 val lyricsDao = db.lyricsDao()
-                val trackRepository = TrackRepository(applicationContext, lyricsDao)
+                val trackRepository = TrackRepository(applicationContext, lyricsDao, db.trackDao())
                 val lyricsRepository = LyricsRepository(applicationContext, lyricsDao)
 
                 val allTracks = trackRepository.getTracks(useMockFallback = true)

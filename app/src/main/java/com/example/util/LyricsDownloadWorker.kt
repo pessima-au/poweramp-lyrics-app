@@ -20,14 +20,14 @@ class LyricsDownloadWorker(
 
         val db = AppDatabase.getDatabase(applicationContext)
         val lyricsDao = db.lyricsDao()
-        val trackRepository = TrackRepository(applicationContext, lyricsDao)
+        val trackRepository = TrackRepository(applicationContext, lyricsDao, db.trackDao())
         val lyricsRepository = LyricsRepository(applicationContext, lyricsDao)
 
         val total = trackIds.size
         var completedCount = 0
 
         // Fetch tracks from repository
-        val allTracks = trackRepository.getTracks(useMockFallback = true)
+        val allTracks = trackRepository.getTracks(useMockFallback = false)
         val tracksToDownload = allTracks.filter { trackIds.contains(it.id) }
 
         for (track in tracksToDownload) {

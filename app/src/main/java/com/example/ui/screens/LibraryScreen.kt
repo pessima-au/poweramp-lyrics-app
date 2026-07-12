@@ -32,6 +32,7 @@ fun LibraryScreen(
     val batchDownloading by viewModel.batchDownloading.collectAsState()
     val downloadProgress by viewModel.downloadProgress.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
+    val isScanning by viewModel.isScanning.collectAsState()
 
     val context = androidx.compose.ui.platform.LocalContext.current
     val permissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
@@ -122,6 +123,14 @@ fun LibraryScreen(
                 }
             }
 
+            if (isScanning) {
+                LinearProgressIndicator(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(3.dp)
+                )
+            }
+
             if (batchDownloading) {
                 Card(
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
@@ -196,6 +205,15 @@ fun LibraryScreen(
                                 viewModel.selectTrack(track)
                                 viewModel.playTrackInPoweramp(track)
                                 viewModel.navigateTo("lyrics_view")
+                            },
+                            onPlayTrack = {
+                                viewModel.playTrackInPoweramp(track)
+                            },
+                            onSearchLyrics = {
+                                viewModel.selectTrack(track)
+                                viewModel.setSearchQuery("${track.title} ${track.artist}")
+                                viewModel.searchLyrics()
+                                viewModel.navigateTo("search")
                             }
                         )
                     }
@@ -211,93 +229,15 @@ fun TrackListItem(
     track: Track,
     isSelected: Boolean,
     onToggleSelect: () -> Unit,
-    onSelectTrack: () -> Unit
+    onSelectTrack: () -> Unit,
+    onPlayTrack: () -> Unit,
+    onSearchLyrics: () -> Unit
 ) {
     val durationMin = track.durationMs / 1000 / 60
     val durationSec = (track.durationMs / 1000) % 60
     val durationFormatted = String.format("%d:%02d", durationMin, durationSec)
 
-    ListItem(
-        headlineContent = {
-            Text(
-                text = track.title,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        },
-        supportingContent = {
-            Text(
-                text = "${track.artist} • ${track.album}",
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        },
-        trailingContent = {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Text(
-                    text = durationFormatted,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                
-                // Status Chip / Icon
-                when (track.status) {
-                    TrackStatus.CACHED -> {
-                        SuggestionChip(
-                            onClick = { },
-                            label = { Text("Cached") },
-                            colors = SuggestionChipDefaults.suggestionChipColors(
-                                containerColor = MaterialTheme.colorScheme.primaryContainer,
-                                labelColor = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
-                        )
-                    }
-                    TrackStatus.INSTRUMENTAL -> {
-                        SuggestionChip(
-                            onClick = { },
-                            label = { Text("Instrumental") },
-                            colors = SuggestionChipDefaults.suggestionChipColors(
-                                containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                                labelColor = MaterialTheme.colorScheme.onSecondaryContainer
-                            )
-                        )
-                    }
-                    TrackStatus.NO_LYRICS -> {
-                        SuggestionChip(
-                            onClick = { },
-                            label = { Text("No Lyrics") },
-                            colors = SuggestionChipDefaults.suggestionChipColors(
-                                containerColor = MaterialTheme.colorScheme.surfaceVariant,
-                                labelColor = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        )
-                    }
-                }
-            }
-        },
-        leadingContent = {
-            if (isSelected) {
-                Checkbox(
-                    checked = true,
-                    onCheckedChange = { onToggleSelect() }
-                )
-            } else {
-                Box(
-                    modifier = Modifier.size(24.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.MusicNote,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                }
-            }
-        },
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .combinedClickable(
@@ -305,7 +245,117 @@ fun TrackListItem(
                 onLongClick = onToggleSelect
             )
             .testTag("track_item_${track.id}")
-    )
+    ) {
+        ListItem(
+            headlineContent = {
+                Text(
+                    text = track.title,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            },
+            supportingContent = {
+                Text(
+                    text = "${track.artist} • ${track.album}",
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            },
+            trailingContent = {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = durationFormatted,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    
+                    // Status Chip / Icon
+                    when (track.status) {
+                        TrackStatus.CACHED -> {
+                            SuggestionChip(
+                                onClick = { },
+                                label = { Text("Cached") },
+                                colors = SuggestionChipDefaults.suggestionChipColors(
+                                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                                    labelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                            )
+                        }
+                        TrackStatus.INSTRUMENTAL -> {
+                            SuggestionChip(
+                                onClick = { },
+                                label = { Text("Instrumental") },
+                                colors = SuggestionChipDefaults.suggestionChipColors(
+                                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                    labelColor = MaterialTheme.colorScheme.onSecondaryContainer
+                                )
+                            )
+                        }
+                        TrackStatus.NO_LYRICS -> {
+                            SuggestionChip(
+                                onClick = { },
+                                label = { Text("No Lyrics") },
+                                colors = SuggestionChipDefaults.suggestionChipColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                    labelColor = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            )
+                        }
+                    }
+                }
+            },
+            leadingContent = {
+                if (isSelected) {
+                    Checkbox(
+                        checked = true,
+                        onCheckedChange = { onToggleSelect() }
+                    )
+                } else {
+                    Box(
+                        modifier = Modifier.size(24.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.MusicNote,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+            }
+        )
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            FilledTonalButton(
+                onClick = onPlayTrack,
+                modifier = Modifier.weight(1f)
+            ) {
+                Icon(Icons.Default.PlayArrow, contentDescription = "Play")
+                Spacer(Modifier.width(4.dp))
+                Text("Play")
+            }
+            
+            OutlinedButton(
+                onClick = onSearchLyrics,
+                modifier = Modifier.weight(1f)
+            ) {
+                Icon(Icons.Default.Search, contentDescription = "Search Lyrics")
+                Spacer(Modifier.width(4.dp))
+                Text("Search")
+            }
+        }
+        
+        HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+    }
 }
 
 @Composable

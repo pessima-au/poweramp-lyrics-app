@@ -116,7 +116,20 @@ class LyricsRepository(
     ): List<MatchingResult> = withContext(Dispatchers.IO) {
         try {
             val queryStr = customQuery ?: "$title $artist"
-            val responseList = lrclibService.searchLyrics(queryStr)
+            var responseList = try {
+                lrclibService.searchLyrics(queryStr)
+            } catch (e: Exception) {
+                emptyList()
+            }
+            
+            // Fallback for tricky searches
+            if (responseList.isEmpty() && customQuery == null) {
+                responseList = try {
+                    lrclibService.searchLyricsDetailed(trackName = title, artistName = artist, albumName = null)
+                } catch (e: Exception) {
+                    emptyList()
+                }
+            }
             
             val candidates = responseList.map { res ->
                 MatchingCandidate(

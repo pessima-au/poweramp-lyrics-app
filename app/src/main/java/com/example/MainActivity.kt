@@ -37,7 +37,7 @@ class MainActivity : ComponentActivity() {
         val lyricsDao = database.lyricsDao()
         val settingsManager = SettingsManager(applicationContext)
         
-        val trackRepository = TrackRepository(applicationContext, lyricsDao)
+        val trackRepository = TrackRepository(applicationContext, lyricsDao, database.trackDao())
         val lyricsRepository = LyricsRepository(applicationContext, lyricsDao)
         
         val viewModelFactory = AppViewModelFactory(
